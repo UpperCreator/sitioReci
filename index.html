@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prototipo Modelo N°1 - Clasificador</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #171a21;
+    --accent: #4f8cff;
+    --text: #e8eaf0;
+    --muted: #9aa1af;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px 64px;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; text-align: center; }
+  p.subtitle { color: var(--muted); margin-top: 0; margin-bottom: 24px; text-align: center; }
+  #app {
+    background: var(--card);
+    border-radius: 16px;
+    padding: 24px;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+  }
+  #webcam-container {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 20px;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #000;
+    min-height: 224px;
+  }
+  #controls {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  button:hover { opacity: 0.85; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #stop-btn { background: #3a3f4b; }
+
+  #mode-tabs {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .tab-btn {
+    background: #232733;
+    color: var(--muted);
+    border: none;
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .tab-btn.active {
+    background: var(--accent);
+    color: white;
+  }
+
+  #image-container {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  #upload-area {
+    width: 100%;
+    border: 2px dashed #3a3f4b;
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  #upload-area.dragover {
+    border-color: var(--accent);
+    background: #1c2029;
+  }
+  #upload-area input { display: none; }
+  #preview-img {
+    max-width: 100%;
+    max-height: 260px;
+    border-radius: 10px;
+    display: none;
+  }
+  .label-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .label-name-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.9rem;
+  }
+  .bar-bg {
+    background: #2a2e38;
+    border-radius: 6px;
+    height: 10px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4f8cff, #7aa9ff);
+    width: 0%;
+    transition: width 0.15s ease-out;
+  }
+  #status {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-top: 16px;
+  }
+  footer {
+    margin-top: 32px;
+    color: var(--muted);
+    font-size: 0.75rem;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<h1>Prototipo Modelo N°1</h1>
+<p class="subtitle">Clasificador en vivo (Teachable Machine)</p>
+
+<div id="app">
+  <div id="mode-tabs">
+    <button class="tab-btn active" id="tab-webcam">Cámara</button>
+    <button class="tab-btn" id="tab-image">Imagen</button>
+  </div>
+
+  <div id="webcam-container"></div>
+  <div id="controls">
+    <button id="start-btn">Iniciar cámara</button>
+    <button id="stop-btn" disabled>Detener</button>
+  </div>
+
+  <div id="image-container">
+    <label id="upload-area" for="file-input">
+      Arrastra una imagen aquí o haz clic para elegir un archivo
+      <input type="file" id="file-input" accept="image/*">
+    </label>
+    <img id="preview-img" alt="Vista previa">
+    <button id="classify-img-btn" disabled>Clasificar imagen</button>
+  </div>
+
+  <div id="label-container"></div>
+  <div id="status">Presiona "Iniciar cámara" para comenzar.</div>
+</div>
+
+
+<!-- TensorFlow.js and Teachable Machine image library -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+
+<script>
+  const URL_MODEL = "./model/";
+
+  let model, webcam, labelContainer, maxPredictions;
+  let loopId = null;
+  let currentMode = "webcam";
+
+  const startBtn = document.getElementById("start-btn");
+  const stopBtn = document.getElementById("stop-btn");
+  const statusEl = document.getElementById("status");
+
+  const tabWebcam = document.getElementById("tab-webcam");
+  const tabImage = document.getElementById("tab-image");
+  const webcamContainer = document.getElementById("webcam-container");
+  const webcamControls = document.getElementById("controls");
+  const imageContainer = document.getElementById("image-container");
+  const uploadArea = document.getElementById("upload-area");
+  const fileInput = document.getElementById("file-input");
+  const previewImg = document.getElementById("preview-img");
+  const classifyImgBtn = document.getElementById("classify-img-btn");
+
+  startBtn.addEventListener("click", init);
+  stopBtn.addEventListener("click", stop);
+  tabWebcam.addEventListener("click", () => switchMode("webcam"));
+  tabImage.addEventListener("click", () => switchMode("image"));
+
+  fileInput.addEventListener("change", handleFileSelect);
+  uploadArea.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    uploadArea.classList.add("dragover");
+  });
+  uploadArea.addEventListener("dragleave", () => uploadArea.classList.remove("dragover"));
+  uploadArea.addEventListener("drop", (e) => {
+    e.preventDefault();
+    uploadArea.classList.remove("dragover");
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      fileInput.files = e.dataTransfer.files;
+      handleFileSelect();
+    }
+  });
+  classifyImgBtn.addEventListener("click", () => predict(previewImg));
+
+  function switchMode(mode) {
+    currentMode = mode;
+    if (mode === "webcam") {
+      tabWebcam.classList.add("active");
+      tabImage.classList.remove("active");
+      webcamContainer.style.display = "flex";
+      webcamControls.style.display = "flex";
+      imageContainer.style.display = "none";
+      statusEl.textContent = webcam;
+    } else {
+      stop();
+      tabImage.classList.add("active");
+      tabWebcam.classList.remove("active");
+      webcamContainer.style.display = "none";
+      webcamControls.style.display = "none";
+      imageContainer.style.display = "flex";
+      statusEl.textContent = model
+        ? "Elige o arrastra una imagen para clasificar."
+        : "Cargando modelo...";
+      ensureModelLoaded();
+    }
+  }
+
+  async function ensureModelLoaded() {
+    if (model) return;
+    try {
+      const modelURL = URL_MODEL + "model.json";
+      const metadataURL = URL_MODEL + "metadata.json";
+      model = await tmImage.load(modelURL, metadataURL);
+      maxPredictions = model.getTotalClasses();
+      buildLabelContainer();
+      if (currentMode === "image") {
+        statusEl.textContent = "Elige o arrastra una imagen para clasificar.";
+      }
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = "Error al cargar el modelo: " + err.message;
+    }
+  }
+
+  function handleFileSelect() {
+    const file = fileInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      previewImg.src = e.target.result;
+      previewImg.style.display = "block";
+      classifyImgBtn.disabled = false;
+      statusEl.textContent = 'Imagen cargada. Presiona "Clasificar imagen".';
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function buildLabelContainer() {
+    labelContainer = document.getElementById("label-container");
+    labelContainer.innerHTML = "";
+    for (let i = 0; i < maxPredictions; i++) {
+      const row = document.createElement("div");
+      row.className = "label-row";
+      row.innerHTML = `
+        <div class="label-name-row">
+          <span id="name-${i}"></span>
+          <span id="pct-${i}">0%</span>
+        </div>
+        <div class="bar-bg"><div class="bar-fill" id="bar-${i}"></div></div>
+      `;
+      labelContainer.appendChild(row);
+    }
+  }
+
+  async function init() {
+    startBtn.disabled = true;
+    statusEl.textContent = "Cargando modelo...";
+
+    try {
+      await ensureModelLoaded();
+
+      statusEl.textContent = "Solicitando acceso a la cámara...";
+
+      const flip = true;
+      webcam = new tmImage.Webcam(224, 224, flip);
+      await webcam.setup();
+      await webcam.play();
+
+      webcamContainer.innerHTML = "";
+      webcamContainer.appendChild(webcam.canvas);
+
+      stopBtn.disabled = false;
+      statusEl.textContent = "Clasificando en vivo...";
+      loop();
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = "Error: " + err.message + " (¿permitiste el acceso a la cámara?)";
+      startBtn.disabled = false;
+    }
+  }
+
+  async function loop() {
+    webcam.update();
+    await predict(webcam.canvas);
+    loopId = window.requestAnimationFrame(loop);
+  }
+
+  async function predict(source) {
+    if (!model || !source) return;
+    const prediction = await model.predict(source);
+    prediction.sort((a, b) => b.probability - a.probability);
+    for (let i = 0; i < maxPredictions; i++) {
+      const p = prediction[i];
+      const pct = (p.probability * 100).toFixed(1);
+      document.getElementById(`name-${i}`).textContent = p.className;
+      document.getElementById(`pct-${i}`).textContent = pct + "%";
+      document.getElementById(`bar-${i}`).style.width = pct + "%";
+    }
+    if (currentMode === "image") {
+      statusEl.textContent = "Clasificación completa.";
+    }
+  }
+
+  function stop() {
+    if (loopId) {
+      window.cancelAnimationFrame(loopId);
+      loopId = null;
+    }
+    if (webcam) {
+      webcam.stop();
+      webcam = null;
+    }
+    stopBtn.disabled = true;
+    startBtn.disabled = false;
+    webcamContainer.innerHTML = "";
+    if (currentMode === "webcam") {
+      statusEl.textContent = 'Detenido. Presiona "Iniciar cámara" para reiniciar.';
+    }
+  }
+</script>
+
+</body>
+</html>
